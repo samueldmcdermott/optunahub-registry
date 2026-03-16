@@ -9,33 +9,26 @@ license: MIT License
 
 ## Class or Function Names
 
-- ThompsonSampler
+- CategoricalThompsonSampler
 
 ## Example
 
 ```python
-import optunahub
 from collections import defaultdict
-import logging
-logger = logging.getLogger(__name__)
+
+import numpy as np
+import optuna
+import optunahub
 
 def gaussians(x: float, label: str):
-    """
-    Args:
-        x: float: nuisance parameter
-        label: str: determines which of four Gaussians we sample from
-    
-    Returns:
-        a Gaussian sample from one of four different normal distributions, depending on the choice of `label` 
-    """
     if label == 'a':
-        return np.random.normal(loc = 1, scale = 8)
+        return np.random.normal(loc=1, scale=8)
     elif label == 'b':
-        return np.random.normal(loc = 5, scale = 2)
+        return np.random.normal(loc=5, scale=2)
     elif label == 'c':
-        return np.random.normal(loc = 0, scale = 3)
+        return np.random.normal(loc=0, scale=3)
     else:
-        return np.random.normal(loc = 2, scale = 2)
+        return np.random.normal(loc=2, scale=2)
 
 def objective(trial):
     xv = trial.suggest_float('x', -1, 1)
@@ -45,24 +38,29 @@ def objective(trial):
 
 package_name = "package/samplers/categorical_thompson_sampler"
 sampler = optunahub.load_module(
-    package=package_name
+    package=package_name,
 ).CategoricalThompsonSampler()
 
-study_T = optuna.create_study(direction='maximize',
-                            sampler=sampler)
+study_T = optuna.create_study(direction='maximize', sampler=sampler)
 study_T.optimize(objective, n_trials=111)
 
 study_base = optuna.create_study(direction='maximize')
 study_base.optimize(objective, n_trials=111)
-lab_dict = defaultdict(list)
-for i in study_base.trials:
-    lab_dict[i.params['label']].append(i.values[0])
-    
-for k, v in study_T.categorical_variable_samples.items():
+
+# Compare per-category results.
+thompson_cats = defaultdict(list)
+base_cats = defaultdict(list)
+for t in study_T.trials:
+    if t.state == optuna.trial.TrialState.COMPLETE:
+        thompson_cats[t.params['label']].append(t.value)
+for t in study_base.trials:
+    if t.state == optuna.trial.TrialState.COMPLETE:
+        base_cats[t.params['label']].append(t.value)
+
+for k in sorted(thompson_cats):
     print(f"label {k}:")
-    print(f"\tThompson sampler: max = {max(v)} from {len(v)} samples")
-    print(f"\tBase sampler: max = {max(lab_dict[k])} from {len(lab_dict[k])} samples")
-    print("\n")
+    print(f"\tThompson sampler: max = {max(thompson_cats[k]):.3f} from {len(thompson_cats[k])} samples")
+    print(f"\tBase sampler: max = {max(base_cats[k]):.3f} from {len(base_cats[k])} samples")
 ```
 
 The base sampler follows a "winner takes all" approach, whereas Thompson sampling does a better job of balancing exploration and exploitation.

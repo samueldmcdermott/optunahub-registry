@@ -7,53 +7,70 @@ from typing import Dict
 from typing import Optional
 from typing import Sequence
 
+import numpy as np
 import optuna
 
 
 logger = logging.getLogger(__name__)
 
+# Key prefix for storing per-category samples in study user_attrs.
+_SAMPLES_ATTR_PREFIX = "categorical_thompson_samples:"
+
 
 class CategoricalThompsonSampler(optuna.samplers.BaseSampler):
-    """
-    This subclasses optuna.sampler.BaseSampler to add Thompson sampling for categorical variables.
-    It defaults to a specified `base_sampler` for other variables.
+    """Sampler that uses Thompson sampling for categorical variables.
 
-    There is one additional keyword argument: `burn_in`, which establishes the values of the categorical
-    choices during a burn-in phase in which the sampler runs through each choice `burn_in` number of times.
-    Thereafter, it draws randomly from the categories and chooses a winner based on these random draws.
-    This version works only for a single categorical variable but could be extended if desired.
+    This subclasses ``optuna.samplers.BaseSampler`` to add Thompson sampling
+    for categorical variables while delegating numerical parameters to a
+    ``base_sampler``.
+
+    Categorical parameters are excluded from the relative search space so that
+    they are handled via ``sample_independent``, where the Thompson sampling
+    logic lives.  A burn-in phase cycles through each category a fixed number
+    of times before switching to Thompson sampling.
+
+    This version works only for a single categorical variable but could be
+    extended if desired.
     """
 
     def __init__(
         self,
         burn_in: int = 10,
-        base_sampler: optuna.samplers.BaseSampler = optuna.samplers.TPESampler(),
+        base_sampler: Optional[optuna.samplers.BaseSampler] = None,
         categorical_variable_name: Optional[str] = None,
+        seed: Optional[int] = None,
     ) -> None:
         """
-
-        :param base_sampler: a valid optuna sampler
-        :param burn_in: an integer setting the duration of the burn in phase
-        :param categorical_variable_name: you can name the categorical variable here if you wish (if not, it will be discovered
-        during the sampling phase)
+        Args:
+            burn_in: Number of times each category is sampled during burn-in.
+            base_sampler: Sampler used for numerical parameters.  Defaults to
+                ``TPESampler`` if *None*.
+            categorical_variable_name: Name of the categorical parameter.  If
+                *None* it is discovered automatically during sampling.
+            seed: Random seed for the Thompson sampling RNG.
         """
-        self.base_sampler = base_sampler
-        self.burn_in, self.burning_in = burn_in, True
+        self.base_sampler = base_sampler or optuna.samplers.TPESampler()
+        self.burn_in = burn_in
+        self._burning_in = True
         self.categorical_variable_name = categorical_variable_name
+        self._rng = np.random.RandomState(seed)
+
+    # ------------------------------------------------------------------
+    # Search-space: exclude categorical distributions so they fall
+    # through to sample_independent.
+    # ------------------------------------------------------------------
 
     def infer_relative_search_space(
         self, study: optuna.study.Study, trial: optuna.trial.FrozenTrial
     ) -> Dict[str, optuna.distributions.BaseDistribution]:
-        """
-
-        Args:
-            study: optuna.study.Study instance
-            trial: optuna.trial.FrozenTrial instance
-
-        Returns:
-            falls back to the behavior of `self.base_sampler.infer_relative_search_space`
-        """
-        return self.base_sampler.infer_relative_search_space(study, trial)
+        search_space = self.base_sampler.infer_relative_search_space(study, trial)
+        # Remove categorical distributions – they will be handled in
+        # sample_independent via Thompson sampling.
+        return {
+            name: dist
+            for name, dist in search_space.items()
+            if not isinstance(dist, optuna.distributions.CategoricalDistribution)
+        }
 
     def sample_relative(
         self,
@@ -61,105 +78,130 @@ class CategoricalThompsonSampler(optuna.samplers.BaseSampler):
         trial: optuna.trial.FrozenTrial,
         search_space: Dict[str, optuna.distributions.BaseDistribution],
     ) -> Dict[str, Any]:
-        """
-
-        Args:
-            study: optuna.study.Study instance
-            trial: optuna.trial.FrozenTrial instance
-            search_space: dictionary of variable names and optuna.distributions.BaseDistribution
-
-        Returns:
-            falls back to the behavior of `self.base_sampler.infer_relative_search_space`
-        """
+        # search_space already has categoricals removed by
+        # infer_relative_search_space, so we can delegate directly.
         return self.base_sampler.sample_relative(study, trial, search_space)
+
+    # ------------------------------------------------------------------
+    # Independent sampling: Thompson sampling for categoricals.
+    # ------------------------------------------------------------------
 
     def sample_independent(
         self,
         study: optuna.study.Study,
         trial: optuna.trial.FrozenTrial,
         param_name: str,
-        param_distribution: optuna.distributions,
-    ) -> Dict[str, Any]:
-        """
-
-        Args:
-            study: optuna.study.Study instance
-            trial: optuna.trial.FrozenTrial instance
-            param_name: name of parameter being sampled
-            param_distribution: distribution of the parameter being sampled
-
-        Returns:
-            If `param_distribution` is an instance of an optuna.distributions.CategoricalDistribution
-            then this performs the Thompson sampling algorithm impleneted in `sample_categorical`.
-            Otherwise, this falls back to the behavior of `base_sampler.sample_independent`.
-        """
+        param_distribution: optuna.distributions.BaseDistribution,
+    ) -> Any:
         if isinstance(param_distribution, optuna.distributions.CategoricalDistribution):
-            return self.sample_categorical(study, param_distribution)
-        return self.base_sampler.sample_independent(study, trial, param_name, param_distribution)
+            return self._sample_categorical(study, param_name, param_distribution)
+        return self.base_sampler.sample_independent(
+            study, trial, param_name, param_distribution
+        )
 
-    def sample_categorical(
-        self, study: optuna.study.Study, param_distribution: optuna.distributions
-    ) -> Dict[str, Any]:
-        """
-        This performs `self.burn_in` number of trials for _each categorical choice_ sequentially before moving to
-        Thompson sampling. This transition is logged.
+    # ------------------------------------------------------------------
+    # Core Thompson sampling logic.
+    # ------------------------------------------------------------------
 
-        For each sample in the Thompson sampling phase, a random sample is drawn (with replacement) from each category
-        The category with the best random draw is selected as the choice for this trial
+    def _sample_categorical(
+        self,
+        study: optuna.study.Study,
+        param_name: str,
+        param_distribution: optuna.distributions.CategoricalDistribution,
+    ) -> Any:
+        """Thompson sampling for a single categorical parameter.
 
-        Args:
-            study: optuna.study.Study instance
-            param_distribution: distribution of the parameter being sampled
-
-        Returns:
-            for the Nth trial before the burn-in phase is complete, after the ((self.burn_in) * len(categories))th
-            trial, this returns the categorical choice whose value is N % len(categories). After the burn-in phase is
-            complete, this draws a random sample from each of the categories and returns the category that
-            provided the maximum sample. This follows the algorithm in arxiv:1707.02038
+        During burn-in, cycles through every category ``self.burn_in`` times.
+        Afterwards, draws one stored observation at random for each category
+        and picks the best (respecting ``study.direction``).
         """
         categories = param_distribution.choices
-        if len(study.trials) <= (self.burn_in) * len(categories):
-            cat_choice = categories[int(len(study.trials) % len(categories))]
-        else:
-            if self.burning_in:
-                logger.info(
-                    f"{self.burn_in} burns for each of the {len(categories)} categories have been completed. Moving to Thompson sampling now."
-                )
-                self.burning_in = False
-            cat_choice = max(
-                study.categorical_variable_samples,
-                key=lambda x: self.base_sampler._rng.rng.choice(
-                    study.categorical_variable_samples[x]
-                ),
+        n_categories = len(categories)
+
+        # Retrieve stored per-category samples for *this* parameter.
+        samples = self._get_samples(study, param_name)
+
+        # --- Burn-in phase ---
+        total_burn_in_trials = self.burn_in * n_categories
+        n_observed = sum(len(v) for v in samples.values())
+
+        if n_observed < total_burn_in_trials:
+            return categories[n_observed % n_categories]
+
+        # --- Thompson sampling phase ---
+        if self._burning_in:
+            logger.info(
+                "%d burns for each of the %d categories of '%s' completed. "
+                "Moving to Thompson sampling.",
+                self.burn_in,
+                n_categories,
+                param_name,
             )
-        return cat_choice
+            self._burning_in = False
+
+        # Only consider categories that belong to *this* parameter.
+        # For each category, draw one stored value uniformly at random.
+        maximize = study.direction == optuna.study.StudyDirection.MAXIMIZE
+
+        best_category = None
+        best_value = None
+        for cat in categories:
+            cat_samples = samples.get(cat, [])
+            if not cat_samples:
+                continue
+            drawn = self._rng.choice(cat_samples)
+            if best_value is None or (maximize and drawn > best_value) or (not maximize and drawn < best_value):
+                best_value = drawn
+                best_category = cat
+
+        if best_category is None:
+            # Fallback: no samples yet (shouldn't happen after burn-in).
+            return self._rng.choice(categories)
+
+        return best_category
+
+    # ------------------------------------------------------------------
+    # after_trial: record the objective value for the chosen category.
+    # ------------------------------------------------------------------
 
     def after_trial(
         self,
         study: optuna.study.Study,
         trial: optuna.trial.FrozenTrial,
         state: optuna.trial.TrialState,
-        values: Sequence[float],
+        values: Optional[Sequence[float]],
     ) -> None:
-        """
-        adds trials to the `categorical_variable_samples` dictionary of `study`. Safely creates this dictionary if
-        it does not already exist.
+        if state != optuna.trial.TrialState.COMPLETE or values is None:
+            return
 
-        Args:
-            study: optuna.study.Study instance
-            trial: optuna.trial.FrozenTrial instance
-            state: optuna.trial.TrialState instance
-            values: the list of values sampled
-        """
-        for param in trial.distributions:
-            if isinstance(
-                trial.distributions[param], optuna.distributions.CategoricalDistribution
-            ):
-                if not hasattr(study, "categorical_variable_name"):
-                    # determine the categorical parameter name if it hasn't been discovered yet
-                    study.categorical_variable_name = param
-                if not hasattr(study, "categorical_variable_samples"):
-                    study.categorical_variable_samples = defaultdict(list)
-                cur_category = trial.params[study.categorical_variable_name]
-                cur_val = values[0]
-                study.categorical_variable_samples[cur_category].append(cur_val)
+        for param_name, distribution in trial.distributions.items():
+            if not isinstance(distribution, optuna.distributions.CategoricalDistribution):
+                continue
+
+            category = trial.params[param_name]
+            value = values[0]
+
+            # Store the observation using study user_attrs.
+            attr_key = f"{_SAMPLES_ATTR_PREFIX}{param_name}:{category}"
+            existing = study.user_attrs.get(attr_key, [])
+            existing.append(value)
+            study.set_user_attr(attr_key, existing)
+
+        self.base_sampler.after_trial(study, trial, state, values)
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _get_samples(
+        study: optuna.study.Study, param_name: str
+    ) -> Dict[str, list]:
+        """Retrieve per-category samples from study user_attrs."""
+        prefix = f"{_SAMPLES_ATTR_PREFIX}{param_name}:"
+        samples: Dict[str, list] = {}
+        for key, value in study.user_attrs.items():
+            if key.startswith(prefix):
+                category = key[len(prefix) :]
+                samples[category] = value
+        return samples
