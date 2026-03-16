@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import defaultdict
 import logging
 from typing import Any
 from typing import Dict
@@ -95,9 +94,7 @@ class CategoricalThompsonSampler(optuna.samplers.BaseSampler):
     ) -> Any:
         if isinstance(param_distribution, optuna.distributions.CategoricalDistribution):
             return self._sample_categorical(study, param_name, param_distribution)
-        return self.base_sampler.sample_independent(
-            study, trial, param_name, param_distribution
-        )
+        return self.base_sampler.sample_independent(study, trial, param_name, param_distribution)
 
     # ------------------------------------------------------------------
     # Core Thompson sampling logic.
@@ -150,7 +147,11 @@ class CategoricalThompsonSampler(optuna.samplers.BaseSampler):
             if not cat_samples:
                 continue
             drawn = self._rng.choice(cat_samples)
-            if best_value is None or (maximize and drawn > best_value) or (not maximize and drawn < best_value):
+            if (
+                best_value is None
+                or (maximize and drawn > best_value)
+                or (not maximize and drawn < best_value)
+            ):
                 best_value = drawn
                 best_category = cat
 
@@ -194,9 +195,7 @@ class CategoricalThompsonSampler(optuna.samplers.BaseSampler):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _get_samples(
-        study: optuna.study.Study, param_name: str
-    ) -> Dict[str, list]:
+    def _get_samples(study: optuna.study.Study, param_name: str) -> Dict[str, list]:
         """Retrieve per-category samples from study user_attrs."""
         prefix = f"{_SAMPLES_ATTR_PREFIX}{param_name}:"
         samples: Dict[str, list] = {}
