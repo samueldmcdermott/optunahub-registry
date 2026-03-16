@@ -13,58 +13,76 @@ license: MIT License
 
 ## Example
 
-```python
-from collections import defaultdict
+### Independent mode (default) — single categorical variable
 
+```python
 import numpy as np
 import optuna
 import optunahub
 
-def gaussians(x: float, label: str):
-    if label == 'a':
-        return np.random.normal(loc=1, scale=8)
-    elif label == 'b':
-        return np.random.normal(loc=5, scale=2)
-    elif label == 'c':
-        return np.random.normal(loc=0, scale=3)
-    else:
-        return np.random.normal(loc=2, scale=2)
-
 def objective(trial):
-    xv = trial.suggest_float('x', -1, 1)
-    label = trial.suggest_categorical('label', ['a', 'b', 'c', 'd'])
-    return gaussians(xv, label)
+    x = trial.suggest_float("x", -5, 5)
+    cat = trial.suggest_categorical("cat", ["a", "b", "c"])
+    rng = np.random.RandomState(trial.number)
+    if cat == "a":
+        return x + rng.normal(loc=3.0, scale=0.5)
+    elif cat == "b":
+        return x + rng.normal(loc=0.0, scale=2.0)
+    else:
+        return x + rng.normal(loc=2.0, scale=2.0)
 
-
-package_name = "package/samplers/categorical_thompson_sampler"
 sampler = optunahub.load_module(
-    package=package_name,
-).CategoricalThompsonSampler()
+    package="package/samplers/categorical_thompson_sampler",
+).CategoricalThompsonSampler(burn_in=4, mode="independent")
 
-study_T = optuna.create_study(direction='maximize', sampler=sampler)
-study_T.optimize(objective, n_trials=111)
-
-study_base = optuna.create_study(direction='maximize')
-study_base.optimize(objective, n_trials=111)
-
-# Compare per-category results.
-thompson_cats = defaultdict(list)
-base_cats = defaultdict(list)
-for t in study_T.trials:
-    if t.state == optuna.trial.TrialState.COMPLETE:
-        thompson_cats[t.params['label']].append(t.value)
-for t in study_base.trials:
-    if t.state == optuna.trial.TrialState.COMPLETE:
-        base_cats[t.params['label']].append(t.value)
-
-for k in sorted(thompson_cats):
-    print(f"label {k}:")
-    print(f"\tThompson sampler: max = {max(thompson_cats[k]):.3f} from {len(thompson_cats[k])} samples")
-    print(f"\tBase sampler: max = {max(base_cats[k]):.3f} from {len(base_cats[k])} samples")
+study = optuna.create_study(direction="maximize", sampler=sampler)
+study.optimize(objective, n_trials=30)
+print(study.best_trial.params)
 ```
 
-The base sampler follows a "winner takes all" approach, whereas Thompson sampling does a better job of balancing exploration and exploitation.
+### Gibbs mode — multiple correlated categorical variables
+
+When the objective depends on *interactions* between categorical parameters,
+Gibbs-conditional Thompson sampling captures those correlations by sampling
+each parameter conditioned on the current values of the others.
+
+```python
+import numpy as np
+import optuna
+import optunahub
+
+GOOD_COMBOS = {("red", "large"), ("blue", "small"), ("green", "medium")}
+
+def objective(trial):
+    x = trial.suggest_float("x", -5, 5)
+    color = trial.suggest_categorical("color", ["red", "blue", "green"])
+    size = trial.suggest_categorical("size", ["small", "medium", "large"])
+    rng = np.random.RandomState(trial.number)
+    bonus = 4.0 if (color, size) in GOOD_COMBOS else 0.0
+    return x + rng.normal(loc=bonus, scale=1.0)
+
+sampler = optunahub.load_module(
+    package="package/samplers/categorical_thompson_sampler",
+).CategoricalThompsonSampler(burn_in=3, mode="gibbs")
+
+study = optuna.create_study(direction="maximize", sampler=sampler)
+study.optimize(objective, n_trials=60)
+print(study.best_trial.params)
+```
 
 ## Others
 
-This package provides a sampler based on the principles of Thompson sampling. For a pedagogical introduction, see [A Tutorial on Thompson Sampling](https://arxiv.org/abs/1707.02038).
+This package provides a sampler based on the principles of Thompson sampling.
+For a pedagogical introduction, see
+[A Tutorial on Thompson Sampling](https://arxiv.org/abs/1707.02038).
+
+**Modes:**
+
+- `"independent"` (default) — each categorical parameter is sampled
+  independently.  Fast and simple; works well when categorical parameters do
+  not interact.
+- `"gibbs"` — all categorical parameters are sampled together via a
+  Gibbs-style conditional sweep.  On each trial the sampler cycles through
+  every categorical parameter, sampling it conditioned on the current values
+  of the others.  Falls back to marginal (unconditional) sampling
+  automatically when conditioned data is sparse.
