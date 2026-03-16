@@ -22,9 +22,16 @@ pip install optunahub hebo
 pip install --upgrade pymoo
 ```
 
+At the moment, for Python 3.12+, the following workaround is required to install HEBO.
+
+```bash
+pip install --no-deps --no-build-isolation hebo
+pip install optuna optunahub numpy pandas pymoo disjoint_set gpytorch
+```
+
 ## APIs
 
-- `HEBOSampler(search_space: dict[str, BaseDistribution] | None = None, *, seed: int | None = None, constant_liar: bool = False, independent_sampler: BaseSampler | None = None)`
+- `HEBOSampler(search_space: dict[str, BaseDistribution] | None = None, *, seed: int | None = None, constant_liar: bool = False, independent_sampler: BaseSampler | None = None, num_obj: int = 1)`
   - `search_space`: By specifying search_space, the sampling speed at each iteration becomes slightly quicker, but this argument is not necessary to run this sampler.
 
     Example:
@@ -46,6 +53,9 @@ pip install --upgrade pymoo
     - Note: HEBO algorithm involves multi-objective optimization of multiple acquisition functions. While `constant_liar` is a simple way to get diverse params for parallel optimization, it may not be the best approach for HEBO.
 
   - `independent_sampler`: A `optuna.samplers.BaseSampler` instance that is used for independent sampling. The parameters not contained in the relative search space are sampled by this sampler. If `None` is specified, `optuna.samplers.RandomSampler` is used as the default.
+
+  - `num_obj`: The number of directions in the optimization study. If set to a value greater than one, use the multi-objective version of HEBO (GeneralBO) as the backend.
+    Default is `num_obj=1`.
 
 ## Example
 
@@ -84,9 +94,31 @@ sampler = module.HEBOSampler(search_space=search_space)
 
 However, users need to make sure that the provided search space and the search space defined in the objective function must be consistent.
 
+### Multi-objective case
+
+```python
+import optuna
+import optunahub
+
+
+def objective(trial: optuna.trial.Trial) -> tuple[float, float]:  
+    x = trial.suggest_float("x", -10, 10)  
+    y = trial.suggest_int("y", -1, 1)  
+    f1 = x**2 + y  
+    f2 = -((x - 2) ** 2 + y)  
+    return f1, f2  
+
+
+module = optunahub.load_module("samplers/hebo")
+sampler = module.HEBOSampler(num_obj=2)
+study = optuna.create_study(sampler=sampler, directions=['minimize', 'maximize'])
+study.optimize(objective, n_trials=100)
+print(study.best_trials)
+```
+
 ## Others
 
-HEBO is the winning submission to the [NeurIPS 2020 Black-Box Optimisation Challenge](https://bbochallenge.com/leaderboard).
+HEBO is the winning submission to [the NeurIPS 2020 Black-Box Optimisation Challenge](https://github.com/rdturnermtl/bbo_challenge_starter_kit?tab=readme-ov-file).
 Please refer to [the official repository of HEBO](https://github.com/huawei-noah/HEBO/tree/master/HEBO) for more details.
 
 ### Reference

@@ -1,18 +1,19 @@
 OptunaHub Registry
 ==================
 
-![OptunaHub](https://github.com/user-attachments/assets/ee24b6eb-a431-4e02-ae52-c2538ffe01ee)
+![OptunaHub](https://github.com/user-attachments/assets/df21f6d7-9f39-48a1-a824-6b060f7503e2)
 
 :link: [**OptunaHub**](https://hub.optuna.org/)
 | :page_with_curl: [**Docs**](https://optuna.github.io/optunahub/)
-| :page_with_curl: [**Tutorials**](https://optuna.github.io/optunahub-registry/)
+| :page_with_curl: [**Tutorials**](https://optuna.github.io/optunahub/tutorials_for_contributors.html)
+| :question: [**OptunaHub FAQ**](https://optuna.github.io/optunahub/faq.html)
 | [**Optuna.org**](https://optuna.org/)
 
 OptunaHub Registry is a registry service for sharing and discovering user-defined Optuna packages. It provides a platform for users to share their Optuna packages with others and discover useful packages created by other users.
 
 See the [OptunaHub Website](https://hub.optuna.org/) for registered packages.
 
-See also the [OptunaHub API documentation](https://optuna.github.io/optunahub/) for the API to use the registry, and the [OptunaHub tutorial](https://optuna.github.io/optunahub-registry/) for how to register and discover packages.
+See also the [OptunaHub API documentation](https://optuna.github.io/optunahub/) for the API to use the registry, and the [tutorials](https://optuna.github.io/optunahub/tutorials_for_contributors.html) for how to register and discover packages.
 
 ## Contribution
 
@@ -36,7 +37,7 @@ When creating your package, please check the following TODO list:
 - Check whether your module works as intended based on the  tips below
 - Fill out `README.md`
 
-For more details, please check [OptunaHub tutorial](https://optuna.github.io/optunahub-registry/).
+For more details, please check [Tutorials for Contributors](https://optuna.github.io/optunahub/tutorials_for_contributors.html).
 
 > [!TIP]
 > The following formatting is a requirement to merge your feature PR:
@@ -59,4 +60,17 @@ For more details, please check [OptunaHub tutorial](https://optuna.github.io/opt
 > )
 > ```
 >
-> For more detail, please check [the tutorial](https://optuna.github.io/optunahub-registry/recipes/005_debugging.html).
+> For more detail, please check [the tutorial](https://optuna.github.io/optunahub/generated/recipes/005_debugging.html).
+
+## Citation
+
+Please cite [the OptunaHub paper](https://arxiv.org/abs/2510.02798) with the following format when you use it in your project:
+
+```bibtex
+@article{ozaki2025optunahub,
+  title={{OptunaHub}: A Platform for Black-Box Optimization},
+  author={Ozaki, Yoshihiko and Watanabe, Shuhei and Yanase, Toshihiko},
+  journal={arXiv preprint arXiv:2510.02798},
+  year={2025}
+}
+```
