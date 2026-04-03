@@ -48,6 +48,7 @@ class CategoricalThompsonSampler(optuna.samplers.BaseSampler):
         seed: Optional[int] = None,
         mode: str = "independent",
         gibbs_min_samples: int = 2,
+        gibbs_random: bool = False,
     ) -> None:
         """
         Args:
@@ -60,6 +61,12 @@ class CategoricalThompsonSampler(optuna.samplers.BaseSampler):
                 conditioned observations required before using conditional
                 samples.  When fewer are available the marginal (unconditional)
                 history is used instead.
+            gibbs_random: If ``True``, randomise the scan order of parameters
+                on each Gibbs sweep.  Random-scan Gibbs is ergodic under weaker
+                conditions than fixed-order (systematic) scan and can reduce
+                correlations between successive samples; see He et al.
+                (2016, https://arxiv.org/abs/1606.03432).  If ``False``
+                (default), parameters are swept in insertion order.
         """
         if mode not in ("independent", "gibbs"):
             raise ValueError(f"mode must be 'independent' or 'gibbs', got {mode!r}")
@@ -68,6 +75,7 @@ class CategoricalThompsonSampler(optuna.samplers.BaseSampler):
         self.burn_in = burn_in
         self.mode = mode
         self._gibbs_min_samples = gibbs_min_samples
+        self._gibbs_random = gibbs_random
         self._rng = np.random.RandomState(seed)
         self._burn_in_logged: Set[str] = set()
 
@@ -181,8 +189,12 @@ class CategoricalThompsonSampler(optuna.samplers.BaseSampler):
             return values
 
         # --- Full Gibbs sweep ---
-        current = self._initialize_from_best_trial(study, categorical_space)
-        for param_name, dist in categorical_space.items():
+        current = self._initialize_from_random_trial(study, categorical_space)
+        param_order = list(categorical_space.keys())
+        if self._gibbs_random:
+            self._rng.shuffle(param_order)
+        for param_name in param_order:
+            dist = categorical_space[param_name]
             other_values = {k: v for k, v in current.items() if k != param_name}
             conditioned = self._get_conditioned_samples(study, param_name, other_values)
             total_conditioned = sum(len(v) for v in conditioned.values())
@@ -298,12 +310,18 @@ class CategoricalThompsonSampler(optuna.samplers.BaseSampler):
             samples.setdefault(cat, []).append(trial.value)
         return samples
 
-    @staticmethod
-    def _initialize_from_best_trial(
+    def _initialize_from_random_trial(
+        self,
         study: optuna.study.Study,
         categorical_space: Dict[str, optuna.distributions.CategoricalDistribution],
     ) -> Dict[str, Any]:
-        """Seed the Gibbs sweep with the best trial's categorical values."""
+        """Seed the Gibbs sweep by sampling a uniformly random completed trial.
+
+        Drawing the seed from the empirical data distribution preserves the
+        exploration property of Thompson sampling.  Seeding from the argmax
+        would bias the entire sweep toward the current best-known configuration,
+        collapsing posterior uncertainty artificially.
+        """
         completed = [
             t
             for t in study.trials
@@ -313,17 +331,12 @@ class CategoricalThompsonSampler(optuna.samplers.BaseSampler):
             # Should not happen after burn-in, but be safe.
             return {name: dist.choices[0] for name, dist in categorical_space.items()}
 
-        maximize = study.direction == optuna.study.StudyDirection.MAXIMIZE
-        best = (
-            max(completed, key=lambda t: t.value)
-            if maximize
-            else min(completed, key=lambda t: t.value)
-        )  # type: ignore[arg-type,return-value]
+        seed_trial = completed[int(self._rng.randint(len(completed)))]
 
         values: Dict[str, Any] = {}
         for name, dist in categorical_space.items():
-            if name in best.params:
-                values[name] = best.params[name]
+            if name in seed_trial.params:
+                values[name] = seed_trial.params[name]
             else:
                 values[name] = dist.choices[0]
         return values
